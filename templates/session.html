@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block title %}{{ session.title }} - Mini Idobata{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <nav class="text-xs text-slate-500">
+    <a href="/" class="hover:text-slate-700">セッション一覧</a>
+    <span class="mx-1">/</span>
+    <span class="text-slate-700">{{ session.title }}</span>
+  </nav>
+
+  <header class="bg-white rounded-xl border border-slate-200 p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <h1 class="text-lg font-semibold text-slate-800 mb-1">
+          {{ session.title }}
+        </h1>
+        {% if session.description %}
+          <p class="text-xs text-slate-500 whitespace-pre-wrap">{{ session.description }}</p>
+        {% else %}
+          <p class="text-xs text-slate-400">説明は登録されていません。</p>
+        {% endif %}
+        <p class="mt-1 text-xs text-slate-400">
+          作成: {{ session.created_at.strftime("%Y-%m-%d %H:%M") }}
+        </p>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid gap-4 md:grid-cols-[2fr,1.5fr] md:items-start">
+    <!-- 左側：AIチャットからメインに出されたアイデア一覧 -->
+    <section class="bg-white rounded-xl border border-slate-200 p-4 flex flex-col">
+      <h2 class="text-sm font-semibold text-slate-800 mb-3">AIチャットからメインに出されたアイデア</h2>
+
+      {% if ideas %}
+        <div class="flex-1 max-h-[60vh] overflow-y-auto space-y-2 pr-1">
+          {% for idea in ideas %}
+            <article
+              class="border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 cursor-pointer"
+              data-idea-card
+              data-idea-title="{{ idea.title }}"
+              data-idea-meta="{{ idea.author }}・{{ idea.created_at.strftime('%Y-%m-%d %H:%M') }}"
+              data-idea-description="{{ idea.description }}"
+            >
+              <header class="flex items-center justify-between mb-0">
+                <div class="flex items-center gap-2">
+                  <div class="text-sm font-semibold text-slate-800">
+                    {{ idea.title }}
+                  </div>
+                  <span class="text-[11px] text-slate-400">
+                    {{ idea.author }}・{{ idea.created_at.strftime("%H:%M") }}
+                  </span>
+                </div>
+                <form
+                  method="post"
+                  action="/sessions/{{ session.id }}/ideas/{{ idea.id }}/delete"
+                  onsubmit="return confirm('このアイデアを削除しますか？');"
+                >
+                  <button
+                    type="submit"
+                    class="inline-flex items-center justify-center rounded-md bg-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-red-100 hover:text-red-700 focus:outline-none focus:ring-1 focus:ring-red-400"
+                  >
+                    削除
+                  </button>
+                </form>
+              </header>
+              <p class="text-[11px] text-slate-700 font-normal whitespace-pre-wrap">
+                {%- if idea.description|length > 60 -%}
+{{ idea.description[:60]|trim }}…
+                {%- else -%}
+{{ idea.description|trim }}
+                {%- endif -%}
+              </p>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="text-sm text-slate-500">
+          まだメインに出されたアイデアがありません。右側の「AIとの個人チャットに進む」から、各自のチャットでアイデアを練り上げてメインに出してみてください。
+        </p>
+      {% endif %}
+    </section>
+
+    <!-- 右側：個人チャットへの入口 + AIによるまとめ -->
+    <section class="space-y-4">
+      <!-- 1. AIとのチャットへ進む欄 -->
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <h2 class="text-sm font-semibold text-slate-800 mb-2">AIとの個人チャットに進む</h2>
+        <p class="text-xs text-slate-600 mb-2">
+          自分専用のAIチャット画面を開きます。名前（ニックネーム可）を入力して「開く」を押してください。
+        </p>
+        <form
+          method="post"
+          action="/sessions/{{ session.id }}/personal/enter"
+          class="flex items-center space-x-2"
+        >
+          <input
+            type="text"
+            name="user_name"
+            required
+            placeholder="例: すみお"
+            class="flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+          >
+            開く
+          </button>
+        </form>
+      </div>
+
+      <!-- 2. このセッションページの説明・使い方 -->
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <h2 class="text-sm font-semibold text-slate-800 mb-2">このページの使い方</h2>
+        <p class="text-xs text-slate-600 mb-2">
+          このページでは、参加者それぞれが個人チャットで考えた案をメインに出していきます。
+        </p>
+        <ol class="text-xs text-slate-600 list-decimal list-inside space-y-1">
+          <li>右上の「AIとの個人チャットに進む」から、自分の名前を入れて個人チャット画面を開きます。</li>
+          <li>個人チャットで発想を広げたり、AIからの質問に答えながら、自分にしっくり来る案を言葉にしていきます。</li>
+          <li>良さそうな案が見えてきたら、個人チャットページの「まとめをAIで生成する」からタイトルと説明を作成し、必要に応じて修正してメインに送ります。</li>
+          <li>「AIチャットからメインに出されたアイデア」を見ながら、チーム全体で話し合ったり、さらに案をブラッシュアップしていきます。</li>
+        </ol>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+
+{% block extra_js %}
+<!-- アイデア詳細モーダル -->
+<div
+  id="idea-detail-modal"
+  class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+>
+  <div class="w-full max-w-lg rounded-xl bg-white shadow-lg border border-slate-200 p-4 space-y-2">
+    <div class="flex items-center justify-between">
+      <h2 id="idea-detail-title" class="text-sm font-semibold text-slate-900">
+        アイデアタイトル
+      </h2>
+      <button
+        type="button"
+        data-idea-modal-close
+        class="text-xs text-slate-500 hover:text-slate-800"
+      >
+        閉じる
+      </button>
+    </div>
+    <p id="idea-detail-meta" class="text-[11px] text-slate-400">
+      author・time
+    </p>
+    <div class="mt-1 max-h-[50vh] overflow-y-auto border border-slate-200 rounded-md bg-slate-50 p-2">
+      <p
+        id="idea-detail-body"
+        class="text-[11px] text-slate-800 whitespace-pre-wrap leading-relaxed"
+      ></p>
+    </div>
+    <div class="flex justify-end">
+      <button
+        type="button"
+        data-idea-modal-close
+        class="mt-2 inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+      >
+        閉じる
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    // アイデアカードをクリックしたときに詳細モーダルを表示
+    const cards = document.querySelectorAll("[data-idea-card]");
+    const modal = document.getElementById("idea-detail-modal");
+    const modalTitle = document.getElementById("idea-detail-title");
+    const modalMeta = document.getElementById("idea-detail-meta");
+    const modalBody = document.getElementById("idea-detail-body");
+    const modalCloseBtns = document.querySelectorAll("[data-idea-modal-close]");
+
+    cards.forEach((card) => {
+      card.addEventListener("click", (event) => {
+        // 削除ボタンなどフォーム内をクリックしたときは展開処理をしない
+        if (event.target.closest("form")) {
+          return;
+        }
+        if (!modal || !modalTitle || !modalMeta || !modalBody) return;
+
+        const title = card.getAttribute("data-idea-title") || "";
+        const meta = card.getAttribute("data-idea-meta") || "";
+        const desc = card.getAttribute("data-idea-description") || "";
+
+        modalTitle.textContent = title;
+        modalMeta.textContent = meta;
+        modalBody.textContent = desc;
+
+        modal.classList.remove("hidden");
+      });
+    });
+
+    // モーダルのクローズ処理
+    modalCloseBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (modal) modal.classList.add("hidden");
+      });
+    });
+
+    // オーバーレイ背景をクリックしたときも閉じる
+    if (modal) {
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          modal.classList.add("hidden");
+        }
+      });
+    }
+  });
+</script>
+{% endblock %}
+
+

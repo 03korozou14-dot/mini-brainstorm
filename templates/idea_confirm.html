@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}アイデアの確認 - Mini Idobata{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <nav class="text-xs text-slate-500">
+    <a href="/" class="hover:text-slate-700">セッション一覧</a>
+    <span class="mx-1">/</span>
+    <a href="/sessions/{{ session.id }}" class="hover:text-slate-700">{{ session.title }}</a>
+    <span class="mx-1">/</span>
+    <a href="/sessions/{{ session.id }}/personal?user={{ user_id }}" class="hover:text-slate-700">
+      個人チャット（{{ user_id }}）
+    </a>
+    <span class="mx-1">/</span>
+    <span class="text-slate-700">メインに出すアイデアの確認</span>
+  </nav>
+
+  <header class="bg-white rounded-xl border border-slate-200 p-4">
+    <h1 class="text-base font-semibold text-slate-800 mb-1">
+      メインに出すアイデアを確認・編集
+    </h1>
+    {% if error_message %}
+      <p class="text-xs text-red-600">
+        {{ error_message }}
+      </p>
+    {% else %}
+      <p class="text-xs text-slate-600">
+        個人チャットの内容から Gemini がまとめたアイデア案です。タイトルと説明を必要に応じて修正してから、
+        「メインに投稿する」を押してください。
+      </p>
+    {% endif %}
+  </header>
+
+  <section class="bg-white rounded-xl border border-slate-200 p-4">
+    <form
+      method="post"
+      action="/sessions/{{ session.id }}/personal/promote/confirm"
+      class="space-y-4"
+    >
+      <input type="hidden" name="user_id" value="{{ user_id }}" />
+
+      <div>
+        <label for="title" class="block text-xs font-medium text-slate-700 mb-1">
+          アイデアのタイトル（10〜20文字程度）
+        </label>
+        <input
+          id="title"
+          name="title"
+          type="text"
+          required
+          maxlength="40"
+          value="{{ draft_title }}"
+          class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+        />
+      </div>
+
+      <div>
+        <label for="description" class="block text-xs font-medium text-slate-700 mb-1">
+          アイデアの詳細・なぜこのアイデアなのか（400文字まで）
+        </label>
+        <textarea
+          id="description"
+          name="description"
+          rows="6"
+          maxlength="800"
+          class="w-full rounded-md border border-slate-300 px-3 py-2 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+        >{{ draft_description }}</textarea>
+        <p class="mt-1 text-[11px] text-slate-400" id="desc-counter">
+          <!-- JS で文字数を更新 -->
+        </p>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <a
+          href="/sessions/{{ session.id }}/personal?user={{ user_id }}"
+          class="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          個人チャットに戻る
+        </a>
+
+        <button
+          type="submit"
+          class="inline-flex items-center justify-center rounded-md bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+        >
+          メインに投稿する
+        </button>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const desc = document.getElementById("description");
+    const counter = document.getElementById("desc-counter");
+    if (!desc || !counter) return;
+
+    const update = () => {
+      const len = desc.value.trim().length;
+      counter.textContent = `${len} 文字（目安: 400文字まで）`;
+    };
+
+    desc.addEventListener("input", update);
+    update();
+  });
+</script>
+{% endblock %}
+
+

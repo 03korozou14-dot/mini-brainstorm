@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+
+{% block title %}ブレストセッション一覧 - Mini Idobata{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <p class="text-xs text-slate-600">
+    現在進行中のブレストセッションは左側に一覧で表示されます。新しくブレストを提示したい場合は、右側のフォームから誰でもセッションを作成できます。
+  </p>
+  <div class="grid gap-6 md:grid-cols-[2fr,1.5fr]">
+  <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h1 class="text-lg font-semibold mb-4">ブレストセッション一覧</h1>
+
+    {% if sessions %}
+      <ul class="space-y-3">
+        {% for s in sessions %}
+          <li class="rounded-lg border border-slate-200 hover:border-slate-400 hover:bg-slate-50 transition">
+            <div class="flex items-stretch justify-between">
+              <a href="/sessions/{{ s.id }}" class="flex-1 block p-3">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-sm font-semibold text-slate-900">{{ s.title }}</span>
+                  <span class="text-[11px] text-slate-400">
+                    {{ s.created_at.strftime("%Y-%m-%d %H:%M") }}
+                  </span>
+                </div>
+                {% if s.description %}
+                  <p class="text-[11px] text-slate-600 line-clamp-2">{{ s.description }}</p>
+                {% else %}
+                  <p class="text-xs text-slate-400">説明なし</p>
+                {% endif %}
+                <p class="mt-1 text-xs text-slate-500">
+                  メインに出されたアイデア {{ idea_counts.get(s.id, 0) }} 件
+                </p>
+              </a>
+              <div class="relative flex items-start pr-3 pt-2">
+                <button
+                  type="button"
+                  class="inline-flex items-center justify-center rounded-md px-2 py-1 text-[14px] font-semibold text-slate-400 hover:text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-300"
+                  aria-label="セッションメニュー"
+                  data-session-menu-toggle="{{ s.id }}"
+                >
+                  …
+                </button>
+                <div
+                  class="hidden absolute right-3 top-7 z-20 w-36 rounded-md border border-slate-200 bg-white shadow-lg text-xs text-slate-700"
+                  data-session-menu="{{ s.id }}"
+                >
+                  <a
+                    href="/sessions/{{ s.id }}"
+                    class="block px-3 py-2 hover:bg-slate-50"
+                  >
+                    詳細を見る
+                  </a>
+                  <form
+                    method="post"
+                    action="/sessions/{{ s.id }}/delete"
+                    onsubmit="return confirm('このセッションと関連する個人チャット・アイデアをすべて削除します。本当によろしいですか？');"
+                  >
+                    <button
+                      type="submit"
+                      class="w-full text-left px-3 py-2 text-red-600 hover:bg-red-50"
+                    >
+                      削除する
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-sm text-slate-500">まだセッションがありません。右側から新しく作成してみてください。</p>
+    {% endif %}
+  </section>
+
+  <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="text-lg font-semibold mb-4">新しいブレストをはじめる</h2>
+    <form method="post" action="/sessions" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium mb-1" for="title">セッションタイトル</label>
+        <input
+          id="title"
+          name="title"
+          type="text"
+          required
+          placeholder="例：新サービスXのコンセプト出し"
+          class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1" for="description">説明（任意）</label>
+        <textarea
+          id="description"
+          name="description"
+          rows="3"
+          placeholder="目的や前提条件、検討したい観点などがあれば書いておくと、参加者とAIの両方に伝わりやすくなります。"
+          class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        ></textarea>
+      </div>
+
+      <button
+        type="submit"
+        class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+      >
+        セッションを作成
+      </button>
+    </form>
+  </section>
+</div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const toggles = document.querySelectorAll("[data-session-menu-toggle]");
+
+    const closeAllMenus = () => {
+      document
+        .querySelectorAll("[data-session-menu]")
+        .forEach((menu) => menu.classList.add("hidden"));
+    };
+
+    toggles.forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const id = btn.getAttribute("data-session-menu-toggle");
+        const menu = document.querySelector(
+          `[data-session-menu=\"${id}\"]`,
+        );
+        if (!menu) return;
+
+        const isHidden = menu.classList.contains("hidden");
+        closeAllMenus();
+        if (isHidden) {
+          menu.classList.remove("hidden");
+        }
+      });
+    });
+
+    document.addEventListener("click", () => {
+      closeAllMenus();
+    });
+  });
+</script>
+{% endblock %}
+
+

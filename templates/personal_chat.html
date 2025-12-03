@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}個人チャット - {{ session.title }}{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <nav class="text-xs text-slate-500">
+    <a href="/" class="hover:text-slate-700">セッション一覧</a>
+    <span class="mx-1">/</span>
+    <a href="/sessions/{{ session.id }}" class="hover:text-slate-700">{{ session.title }}</a>
+    <span class="mx-1">/</span>
+    <span class="text-slate-700">個人チャット（{{ user_id }}）</span>
+  </nav>
+
+  <header class="bg-white rounded-xl border border-slate-200 p-4">
+    <h1 class="text-lg font-semibold text-slate-800 mb-1">
+      個人アイデア出しチャット
+    </h1>
+    <p class="text-sm text-slate-600">
+      あなたとAIだけのスペースです。自由に発想を広げたり、深掘りしたりしてみてください。良さそうな案ができたら、右下のボタンでまとめを生成し、自由に修正して、メインに送ることができます。
+    </p>
+    <p class="mt-1 text-xs text-slate-400">
+      セッション: {{ session.title }} ・ ユーザー: {{ user_id }}
+    </p>
+  </header>
+
+  <div class="grid gap-4 md:grid-cols-[2fr,1fr] md:items-start">
+    <section class="bg-white rounded-xl border border-slate-200 p-4 flex flex-col">
+      <h2 class="text-sm font-semibold text-slate-800 mb-3">チャット履歴</h2>
+      <div
+        id="chat-container"
+        class="max-h-[60vh] overflow-y-auto space-y-2 pr-1 bg-slate-50 rounded-md p-3"
+      >
+        {% if history %}
+          {% for m in history %}
+            <div class="flex {{ 'justify-end' if m.role == 'user' else 'justify-start' }}">
+              <div
+                class="max-w-[80%] rounded-2xl text-[13px] leading-snug whitespace-pre-wrap
+                  {% if m.role == 'user' %}
+                    inline-flex items-center justify-center bg-blue-600 text-white px-2 py-1
+                  {% else %}
+                    inline-flex items-center justify-center bg-white border border-slate-200 text-slate-800 px-3 py-1.5
+                  {% endif %}"
+              >
+                <div class="text-left">{{ m.content }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="text-sm text-slate-500">
+            まだメッセージがありません。下のフォームからAIに話しかけてみてください。
+          </p>
+        {% endif %}
+      </div>
+
+      <form method="post" action="/sessions/{{ session.id }}/personal/messages" class="mt-3 space-y-2">
+        <input type="hidden" name="user_id" value="{{ user_id }}" />
+        <label for="content" class="block text-xs font-medium text-slate-700">メッセージを送る</label>
+        <textarea
+          id="content"
+          name="content"
+          rows="3"
+          required
+          placeholder="今考えていることや、相談したいこと、思いついたアイデアを書いてください。"
+          class="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        ></textarea>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <a
+              href="/sessions/{{ session.id }}"
+              class="text-xs text-slate-500 hover:text-slate-700"
+            >
+              ← メインページに戻る
+            </a>
+            <form
+              method="post"
+              action="/sessions/{{ session.id }}/personal/reset"
+              onsubmit="return confirm('この個人チャットの履歴をすべて削除してリセットします。よろしいですか？');"
+              class="inline"
+            >
+              <input type="hidden" name="user_id" value="{{ user_id }}" />
+              <button
+                type="submit"
+                class="text-xs text-red-500 hover:text-red-700 underline"
+              >
+                チャットをリセット
+              </button>
+            </form>
+          </div>
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-700 focus:ring-offset-1"
+          >
+            送信する
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <h2 class="text-sm font-semibold text-slate-800 mb-2">このチャットからアイデアをまとめる</h2>
+        <p class="text-xs text-slate-600 mb-3">
+          これまでの対話内容をもとに、AIが1つのアイデアを抽出し、タイトルと説明をまとめてくれます。
+        </p>
+        <form method="post" action="/sessions/{{ session.id }}/personal/promote" class="space-y-2">
+          <input type="hidden" name="user_id" value="{{ user_id }}" />
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1 w-full"
+            {% if not history %}
+              disabled
+              class="inline-flex items-center justify-center rounded-md bg-slate-300 px-3 py-1.5 text-xs font-medium text-white cursor-not-allowed w-full"
+            {% endif %}
+          >
+            まとめをAIで生成する
+          </button>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-500 space-y-2">
+        <h3 class="text-[13px] font-semibold text-slate-700">使い方のヒント</h3>
+        <div class="space-y-1">
+          <p>最初に、このセッションで考えたいことを一文で書き、そのあとに自分の意見や考えを自由に述べてください。</p>
+          <p>AIからの質問には、できるだけ具体的な返事をすると、あとで答えと理由をまとめやすくなります。</p>
+          <p>自分の中で「これが一番しっくり来るかも」という方向が見えてきたら、右の「このチャットからまとめを生成する」で、答えと説明をメインに出してみてください。</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</div>
+
+<script>
+  (function () {
+    const container = document.getElementById('chat-container');
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  })();
+</script>
+</div>
+{% endblock %}*** End Patch`"}}
+
