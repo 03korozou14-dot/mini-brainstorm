@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import json
 
 import google.generativeai as genai
@@ -34,6 +34,9 @@ else:
     STATE_FILE = DATA_DIR / "state.json"
 
 load_dotenv()
+
+# アプリ内で使用するタイムゾーン（日本時間）
+JST = timezone(timedelta(hours=9))
 
 # Gemini API の設定（APIキーは環境変数 GEMINI_API_KEY から読む）
 gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -401,6 +404,49 @@ def generate_gemini_text(
         return f"Gemini呼び出しでエラーが発生しました: {e}"
 
 
+def _strip_leading_paraphrase(text: str) -> str:
+    """
+    Gemini が日本語でよく書く「「◯◯」とのことですが、〜」のような
+    冒頭のオウム返し一文を、可能な範囲で取り除くための軽い前処理。
+
+    あくまで画面表示をすっきりさせる目的で、1回だけ適用する。
+    """
+    if not text:
+        return text
+
+    # 1) 代表的なパターン：「〜とのことですが、」「〜ということですが、」など（引用の有無にかかわらず）
+    # 冒頭のオウム返しフレーズだけを削り、その後の本題は残す。
+    pattern_prefix = r'^(?:「[^」]{1,80}」|[^。！？\n]{1,80}?)(?:という|との)?ことですが、\s*'
+    cleaned = re.sub(pattern_prefix, "", text, count=1)
+    if cleaned and cleaned != text:
+        return cleaned
+
+    # 2) 引用付きで「〜ですね／ですが」で終わる短い一文
+    pattern_quote = r'^「[^」]{1,80}」[^。\n]{0,40}?(?:ですが|ですね)[、。]?\s*'
+    cleaned = re.sub(pattern_quote, "", text, count=1)
+    if cleaned and cleaned != text:
+        return cleaned
+
+    # 3) 引用なしのオウム返しっぽい一文（例: 〜ですね。〜でしょうか。）
+    # 先頭の1文を取り出し、「〜ですね／〜でしょうか」などで終わる短い文なら削除する
+    m = re.search(r"[。！？]\s*", text)
+    if not m:
+        return text
+
+    first_sentence = text[: m.end()]
+    # あまり長い文まで削ると誤爆しやすいので、長さでざっくり制限する
+    if len(first_sentence) <= 40 and (
+        "ですね" in first_sentence
+        or "でしょうか" in first_sentence
+        or "ということです" in first_sentence
+        or "ということですね" in first_sentence
+    ):
+        rest = text[m.end() :].lstrip()
+        return rest or text
+
+    return text
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     sessions = sorted(SESSIONS.values(), key=lambda s: s.created_at, reverse=True)
@@ -430,7 +476,7 @@ async def create_session(
         id=session_id,
         title=title,
         description=description,
-        created_at=datetime.now(),
+        created_at=datetime.now(JST),
         messages=[],
         last_summary=None,
     )
@@ -524,7 +570,7 @@ async def add_message(
             id=str(uuid.uuid4()),
             author=author or "匿名",
             content=content.strip(),
-            created_at=datetime.now(),
+            created_at=datetime.now(JST),
         )
         session.messages.append(msg)
 
@@ -631,20 +677,16 @@ async def personal_chat_message(
 
     system_prompt = (
         "あなたは少人数チームのブレインストーミングを支援する、日本語のファシリテーターです。\n"
-        "【役割と目的】このチャットのセッションタイトルと説明を手がかりに、ユーザーが考えているテーマの意味や目的を大切にしながら、"
-        "最終的にそのテーマに対する1つ以上の具体的なアイデア（行動パターンや過ごし方、決め方など）が見えてくるように支援してください。"
-        "AIが結論を一方的に決めつけず、途中の思考整理や深掘り、選択肢の拡張を一緒に行う「壁打ち」相手として寄り添ってください。\n"
-        "【出力の考え方】\n"
-        "・返信は日本語、です・ます調で、状況に応じて読みやすい長さ（目安として2〜4文）にしてください。\n"
-        "・最初の1文目は「なるほど。」「いいですね。」「素敵です。」のようなごく短い一言の共感や相槌を。そのあとすぐに質問や提案、具体的な問いかけに進んでください。\n"
-        "・直近2〜3ターンと同じ構成（共感→理由を尋ねる→選択肢を挙げる、など）にならないようにしてください。理由や背景を深掘りする質問／条件や制約を整理する質問／具体的な場面やエピソードを尋ねる質問／まったく別の角度からの問いかけ、など複数のパターンをローテーションするつもりで使ってください。\n"
-        "・必要に応じて、ユーザーの条件や気持ちに合いそうな選択肢や視点をいくつか示し、「どれがしっくりきますか？」「他にどんなパターンがありそうですか？」のように、次の一歩を考えやすくしてください。\n"
-        "・ときどき、それまでの会話から見えてきたアイデア候補や方向性を短く整理し、「今のところ〇〇という案が見えてきていますが、どう感じますか？」のようにユーザーと一緒に確かめてください。\n"
-        "【禁止事項】\n"
-        "・過去に自分がした質問とほぼ同じ内容を、言い換えて繰り返さないでください。\n"
-        "・「詳しく教えてください」「もう少し具体的に教えてください」だけの汎用的な質問で終えないでください。\n"
-        "・抽象的な一般論だけで終わらせず、必ずユーザーの具体的な発言や状況にひもづけて書いてください。\n"
-        "・ユーザーの直前の発言を「◯◯ということですね」「◯◯ということでしょうか」「◯◯なのですね」のような形で長く言い換える一文要約は絶対に書かないでください（共感の一言だけで止めてください）。\n"
+        "【役割】セッションのタイトル・説明と、これまでの会話を踏まえて、ユーザーが自分なりの答えや行動パターンを見つけられるように、考えを整理したり視点や選択肢を増やしたりしてください。AIが結論を決めるのではなく、一緒に考える相手として振る舞ってください。\n"
+        "【返答スタイル】\n"
+        "・日本語のです・ます調で、内容に応じて2〜5文程度の自然な長さにしてください。\n"
+        "・相槌や共感から始める必要はありません。必要であれば短い一言だけにとどめ、基本的にはすぐに本題の整理・問い・提案に入ってください。\n"
+        "・各ターンで「いま何をしたいか」（例: 背景や前提・制約の整理／具体的な場面やエピソードの具体化／別案やバリエーションの提示／ここまでの整理と次の一歩の提案 など）を1つ決め、その役割に沿って返答してください。\n"
+        "・直近の一往復だけでなく、ここ数往復の流れや繰り返し出ているテーマ、以前の発言とのギャップも踏まえて返答してください。\n"
+        "・返答の終わり方は毎回質問である必要はありません。質問、短い整理、具体的なアイデアや次の一歩の提案を自由に組み合わせてください。\n"
+        "【避けてほしいこと】\n"
+        "・毎回ほぼ同じ構成や言い回し（「◯◯ということですね」「詳しく教えてください」など）を繰り返さないでください。\n"
+        "・抽象的な一般論だけで終わらせず、必ずユーザーの具体的な発言や状況にひもづけてください。\n"
     )
 
     full_prompt = (
@@ -663,7 +705,7 @@ async def personal_chat_message(
         "# 指示\n\n"
         f"{system_prompt}\n"
         "上記の履歴と発言を踏まえ、出力ルールに従って回答してください。\n"
-        f"特に、直近の発言にある「{text}」という意図に対し、ファシリテーターとして次の思考を促す問いかけを返してください。\n"
+        "特に、直近のユーザー発言の意図を踏まえつつ、これまでの流れ全体を見たうえで、次の思考が進むような整理・問いかけ・具体案のいずれか（または組み合わせ）を返してください。\n"
     )
 
     # デバッグ用ログ
@@ -676,6 +718,7 @@ async def personal_chat_message(
         )
 
     assistant_content = generate_gemini_text(full_prompt, temperature=0.8)
+    assistant_content = _strip_leading_paraphrase(assistant_content)
 
     if DEBUG_MODE:
         print(
@@ -691,7 +734,7 @@ async def personal_chat_message(
         user_id=user_id,
         role="assistant",
         content=assistant_content,
-        created_at=datetime.now(),
+        created_at=datetime.now(JST),
     )
     history.append(assistant_msg)
 
@@ -881,7 +924,7 @@ async def confirm_promoted_idea(
         author=user_id,
         title=title or "アイデア（タイトル未設定）",
         description=description or title,
-        created_at=datetime.now(),
+        created_at=datetime.now(JST),
     )
     IDEAS.append(idea)
 
