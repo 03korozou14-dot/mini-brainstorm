@@ -321,27 +321,6 @@ def _extract_text_from_gemini_response(response: Any) -> str | None:
     return None
 
 
-def generate_local_facilitator_reply(latest_user_message: str) -> str:
-    """
-    Gemini からうまく応答を取得できなかった場合のローカル fallback。
-    きわめてシンプルだが、少なくともエラーメッセージよりは会話として自然な文を返す。
-    """
-    latest = latest_user_message.strip()
-    if not latest:
-        latest = "いまのお気持ちや状況"
-
-    first = f"{latest}と感じていらっしゃるのですね。"
-    second = (
-        "その中で、特に大事にしたいポイントはどんなところでしょうか？"
-        "たとえば「こうなっていたら理想的だな」と思う状態があれば、言葉にしてみてもらえますか。"
-    )
-    third = (
-        "また、普段の過ごし方や制約との違いで気になっている点があれば、"
-        "具体的なエピソードを1つ挙げて教えていただけると、さらに整理しやすくなりそうです。"
-    )
-    return "\n".join([first, second, third])
-
-
 def generate_gemini_text(
     prompt: str,
     temperature: float = 0.6,
