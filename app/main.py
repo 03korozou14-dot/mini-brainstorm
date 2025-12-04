@@ -122,17 +122,18 @@ def _save_state() -> None:
     少人数利用を想定した簡易実装なので、毎回全体を書き出している。
     """
     # まずは Supabase に保存を試みる（設定されている場合）
+    # Supabase に渡すため、datetime なども含めて JSON シリアライズ可能な形に変換する
     data: Dict[str, Any] = {
-        "sessions": [s.dict() for s in SESSIONS.values()],
+        "sessions": [s.model_dump(mode="json") for s in SESSIONS.values()],
         "personal_chats": [
             {
                 "session_id": sid,
                 "user_id": uid,
-                "history": [m.dict() for m in history],
+                "history": [m.model_dump(mode="json") for m in history],
             }
             for (sid, uid), history in PERSONAL_CHATS.items()
         ],
-        "ideas": [i.dict() for i in IDEAS],
+        "ideas": [i.model_dump(mode="json") for i in IDEAS],
     }
 
     if supabase_client:
