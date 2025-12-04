@@ -703,18 +703,6 @@ async def personal_chat_message(
             "assistant_content (repr, first 200 chars):",
             repr(assistant_content)[:200],
         )
-
-    # Gemini からうまく文章を取得できなかった場合は、ローカルの簡易ファシリテーター応答に切り替える
-    if assistant_content.startswith(
-        "AIからの応答をうまく読み取れませんでした。"
-    ) or "Gemini APIキー" in assistant_content or "Gemini呼び出しでエラー" in assistant_content:
-        if DEBUG_MODE:
-            print(
-                "fallback: using local facilitator reply instead of Gemini response."
-            )
-        assistant_content = generate_local_facilitator_reply(text)
-
-    if DEBUG_MODE:
         print("=== END DEBUG personal_chat_message ===")
 
     # AI応答を履歴に追加
