@@ -8,17 +8,30 @@ from pydantic import BaseModel
 
 from dotenv import load_dotenv
 import os
+import re
 import uuid
 from datetime import datetime
 import json
 
 import google.generativeai as genai
 
+try:
+    from supabase import create_client  # type: ignore
+except ImportError:  # ライブラリ未インストール時でもアプリが落ちないようにする
+    create_client = None  # type: ignore
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "templates"
-DATA_DIR = BASE_DIR / "data"
-STATE_FILE = DATA_DIR / "state.json"
+
+# 状態保存用のパスは環境変数で上書き可能にしておく（ファイル保存のフォールバック用）
+custom_state_file = os.getenv("BRAINSTORM_STATE_FILE")
+if custom_state_file:
+    STATE_FILE = Path(custom_state_file)
+    DATA_DIR = STATE_FILE.parent
+else:
+    DATA_DIR = BASE_DIR / "data"
+    STATE_FILE = DATA_DIR / "state.json"
 
 load_dotenv()
 
@@ -26,6 +39,21 @@ load_dotenv()
 gemini_api_key = os.getenv("GEMINI_API_KEY")
 if gemini_api_key:
     genai.configure(api_key=gemini_api_key)
+
+# Supabase クライアント設定（設定されていない場合は None のまま）
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_TABLE = "app_state"
+SUPABASE_STATE_ID = "default"
+supabase_client: Any | None = None
+if create_client and SUPABASE_URL and SUPABASE_SERVICE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    except Exception:
+        supabase_client = None
+
+# デバッグログの出力有無（プロンプトやレスポンスをログに出すかどうか）
+DEBUG_MODE = os.getenv("BRAINSTORM_DEBUG", "").lower() in {"1", "true", "yes"}
 
 app = FastAPI(title="Mini Idobata Brainstorm")
 
@@ -86,21 +114,33 @@ def _save_state() -> None:
     現在のセッション情報を JSON に永続化する。
     少人数利用を想定した簡易実装なので、毎回全体を書き出している。
     """
-    _ensure_data_dir()
+    # まずは Supabase に保存を試みる（設定されている場合）
+    data: Dict[str, Any] = {
+        "sessions": [s.dict() for s in SESSIONS.values()],
+        "personal_chats": [
+            {
+                "session_id": sid,
+                "user_id": uid,
+                "history": [m.dict() for m in history],
+            }
+            for (sid, uid), history in PERSONAL_CHATS.items()
+        ],
+        "ideas": [i.dict() for i in IDEAS],
+    }
 
+    if supabase_client:
+        try:
+            supabase_client.table(SUPABASE_TABLE).upsert(
+                {"id": SUPABASE_STATE_ID, "data": data}
+            ).execute()
+            return
+        except Exception:
+            # Supabase 保存に失敗した場合は、ローカルファイルへの保存にフォールバックする
+            pass
+
+    # Supabase が無い・失敗した場合はローカルファイルに保存
+    _ensure_data_dir()
     try:
-        data: Dict[str, Any] = {
-            "sessions": [s.dict() for s in SESSIONS.values()],
-            "personal_chats": [
-                {
-                    "session_id": sid,
-                    "user_id": uid,
-                    "history": [m.dict() for m in history],
-                }
-                for (sid, uid), history in PERSONAL_CHATS.items()
-            ],
-            "ideas": [i.dict() for i in IDEAS],
-        }
         STATE_FILE.write_text(
             json.dumps(data, ensure_ascii=False, default=str, indent=2),
             encoding="utf-8",
@@ -112,17 +152,35 @@ def _save_state() -> None:
 
 def _load_state() -> None:
     """
-    起動時に JSON からセッション情報を読み込む。
-    ファイルが無い・壊れている場合は何もしない。
+    起動時に永続化されたセッション情報を読み込む。
+    Supabase が設定されていればそちらを優先し、なければローカルの JSON ファイルを読む。
     """
-    if not STATE_FILE.exists():
-        return
+    data: Dict[str, Any] | None = None
 
-    try:
-        raw = STATE_FILE.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except Exception:
-        return
+    # Supabase からの読み込みを優先
+    if supabase_client:
+        try:
+            res = (
+                supabase_client.table(SUPABASE_TABLE)
+                .select("data")
+                .eq("id", SUPABASE_STATE_ID)
+                .execute()
+            )
+            rows = getattr(res, "data", []) or []
+            if rows:
+                data = rows[0].get("data") or {}
+        except Exception:
+            data = None
+
+    # Supabase で取得できなかった場合はローカルファイルから読み込む
+    if data is None:
+        if not STATE_FILE.exists():
+            return
+        try:
+            raw = STATE_FILE.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except Exception:
+            return
 
     sessions_raw = data.get("sessions") or []
     personal_chats_raw = data.get("personal_chats") or []
@@ -292,17 +350,17 @@ def generate_gemini_text(
 ) -> str:
     """
     Gemini API を使ってテキストを生成するヘルパー関数。
-    モデル名は環境変数 BRAINSTORM_MODEL で上書き可能（なければ flash 系の最新モデル）。
+    モデル名は環境変数 BRAINSTORM_MODEL で上書き可能（なければ 2.0 flash を使う）。
     """
     if not gemini_api_key:
         return "Gemini APIキー(GEMINI_API_KEY)が設定されていないため、AI応答を生成できません。"
 
-    # デフォルトは軽量な 2.0 flash-lite モデル。
+    # デフォルトは汎用性の高い 2.0 flash モデル。
     # model_override > 環境変数 BRAINSTORM_MODEL > デフォルト の優先順位で決める。
     model_name = (
         model_override
         or os.getenv("BRAINSTORM_MODEL")
-        or "models/gemini-2.0-flash-lite"
+        or "models/gemini-2.0-flash"
     )
     # list_models の結果に合わせて、先頭に models/ が無ければ付ける
     if not model_name.startswith("models/"):
@@ -325,16 +383,17 @@ def generate_gemini_text(
             last_response = response
 
             # デバッグ用: レスポンスの概要をログに出す（長すぎないように先頭だけ）
-            try:
-                print(
-                    f"=== DEBUG generate_gemini_text attempt {attempt + 1}/"
-                    f"{max_retries + 1}: raw response repr (truncated) ==="
-                )
-                print("response:")
-                print(repr(response)[:800])
-                print("=== DEBUG END ===")
-            except Exception:
-                pass
+            if DEBUG_MODE:
+                try:
+                    print(
+                        f"=== DEBUG generate_gemini_text attempt {attempt + 1}/"
+                        f"{max_retries + 1}: raw response repr (truncated) ==="
+                    )
+                    print("response:")
+                    print(repr(response)[:800])
+                    print("=== DEBUG END ===")
+                except Exception:
+                    pass
 
             # レスポンスから可能な限りテキストを取り出す
             text = _extract_text_from_gemini_response(response)
@@ -578,57 +637,85 @@ async def personal_chat_message(
     )
     history.append(user_msg)
 
-    # 直近10件のみをテキストとしてまとめる
-    recent_history = history[-10:]
+    # これまでの個人チャット履歴すべてをテキストとしてまとめる
     conversation_text = "\n".join(
-        [f"{m.role}: {m.content}" for m in recent_history]
+        [f"{m.role}: {m.content}" for m in history]
+    )
+
+    # セッション情報と要約を前提コンテキストとして渡しつつ、
+    # 出力ルールは system_prompt にまとめる。
+    session_description = session.description or "（説明なし）"
+    summary_text = (
+        session.last_summary
+        or "まだ正式な要約はありません。これまでの会話とセッション情報から状況を推測してください。"
     )
 
     system_prompt = (
-        "あなたは少人数チームのブレインストーミングを支援する、日本語のファシリテーターです。"
-        "このセッションのテーマは「{session.title}」であり、説明は「{session.description or '（説明なし）'}」です。"
-        "常にこのテーマや目的を意識しながら、話がそれすぎないように支援してください。"
-        "出力スタイルは次のルールに従ってください："
-        "1) ユーザーに自分で考えてもらうことを目的とした具体的な問いかけを中心にする。"
-        "   - 目的・背景、制約条件、本当に大事にしたい感情、普段とのギャップなどを、ユーザーの言葉を引用しながら尋ねる。"
-        "2) あいさつや共感だけの1文から始めるのではなく、最初の文から問いかけや整理に入る。"
-        "3) 直近の対話履歴の中で、すでに自分（assistant）が尋ねた内容とまったく同じ問いかけや言い回しを繰り返さない。"
-        "   まだ十分に聞けていない観点（たとえば、これまであまり触れていない候補や基準）を優先して質問する。"
-        "4) 「もう少し具体的に教えてください」「詳しく教えてください」のような汎用的な質問だけを書くのは禁止し、"
-        "   必ず2つ以上の視点や選択肢を示して質問する。"
-        "5) 抽象的な一般論や、ユーザーの発言を言い換えるだけの文章は書かない。"
-        "6) 文体は常に丁寧語（です・ます調）を用いる。"
-        "7) 文は途中で切らずに完結させ、全体で2〜3行程度、日本語の話し言葉で簡潔に書く。"
-        "8) 基本的には問いかけと整理を優先し、積極的な提案はしない。"
-        "   ただし、会話が行き詰まっている様子だったり、ユーザーから明確にアイデアや提案を求められた場合は、"
-        "   ユーザーの条件や気持ちを踏まえたうえで、選択肢の一例として1〜2個の具体的なアイデアを控えめに示してよい。"
-        "AI自身が結論やベストな答えを決めてしまわず、ユーザーの思考や選択肢が広がることを優先してください。"
+        "あなたは少人数チームのブレインストーミングを支援する、日本語のファシリテーターです。\n"
+        "【役割と目的】このチャットのセッションタイトルと説明を手がかりに、ユーザーが考えているテーマの意味や目的を大切にしながら、"
+        "最終的にそのテーマに対する1つ以上の具体的なアイデア（行動パターンや過ごし方、決め方など）が見えてくるように支援してください。"
+        "AIが結論を一方的に決めつけず、途中の思考整理や深掘り、選択肢の拡張を一緒に行う「壁打ち」相手として寄り添ってください。\n"
+        "【出力の考え方】\n"
+        "・返信は日本語、です・ます調で、状況に応じて読みやすい長さ（目安として2〜4文）にしてください。\n"
+        "・最初の1文目は「なるほど。」「いいですね。」「素敵です。」のようなごく短い一言の共感や相槌を。そのあとすぐに質問や提案、具体的な問いかけに進んでください。\n"
+        "・直近2〜3ターンと同じ構成（共感→理由を尋ねる→選択肢を挙げる、など）にならないようにしてください。理由や背景を深掘りする質問／条件や制約を整理する質問／具体的な場面やエピソードを尋ねる質問／まったく別の角度からの問いかけ、など複数のパターンをローテーションするつもりで使ってください。\n"
+        "・必要に応じて、ユーザーの条件や気持ちに合いそうな選択肢や視点をいくつか示し、「どれがしっくりきますか？」「他にどんなパターンがありそうですか？」のように、次の一歩を考えやすくしてください。\n"
+        "・ときどき、それまでの会話から見えてきたアイデア候補や方向性を短く整理し、「今のところ〇〇という案が見えてきていますが、どう感じますか？」のようにユーザーと一緒に確かめてください。\n"
+        "【禁止事項】\n"
+        "・過去に自分がした質問とほぼ同じ内容を、言い換えて繰り返さないでください。\n"
+        "・「詳しく教えてください」「もう少し具体的に教えてください」だけの汎用的な質問で終えないでください。\n"
+        "・抽象的な一般論だけで終わらせず、必ずユーザーの具体的な発言や状況にひもづけて書いてください。\n"
+        "・ユーザーの直前の発言を「◯◯ということですね」「◯◯ということでしょうか」「◯◯なのですね」のような形で長く言い換える一文要約は絶対に書かないでください（共感の一言だけで止めてください）。\n"
     )
 
     full_prompt = (
-        f"{system_prompt}\n\n"
-        "これまでの対話履歴:\n"
-        f"{conversation_text}\n\n"
-        "上記を踏まえて、ユーザーの最新メッセージに続く形で日本語で返信してください。"
+        "# 前提コンテキスト\n\n"
+        "これまでの議論要約:\n"
+        f"{summary_text}\n\n"
+        "セッション情報:\n"
+        f"- タイトル: 「{session.title}」\n"
+        f"- 説明: 「{session_description}」\n\n"
+        "# 会話履歴\n\n"
+        "<history>\n"
+        f"{conversation_text}\n"
+        "</history>\n\n"
+        "# 直近のユーザー発言\n\n"
+        f"「{text}」\n\n"
+        "# 指示\n\n"
+        f"{system_prompt}\n"
+        "上記の履歴と発言を踏まえ、出力ルールに従って回答してください。\n"
+        f"特に、直近の発言にある「{text}」という意図に対し、ファシリテーターとして次の思考を促す問いかけを返してください。\n"
     )
 
     # デバッグ用ログ
-    print("=== DEBUG personal_chat_message ===")
-    print("user_id:", user_id)
-    print("full_prompt (first 400 chars):", full_prompt[:400].replace("\n", "\\n"))
+    if DEBUG_MODE:
+        print("=== DEBUG personal_chat_message ===")
+        print("user_id:", user_id)
+        print(
+            "full_prompt (first 400 chars):",
+            full_prompt[:400].replace("\n", "\\n"),
+        )
 
-    assistant_content = generate_gemini_text(full_prompt, temperature=0.6)
+    assistant_content = generate_gemini_text(full_prompt, temperature=0.8)
 
-    print("assistant_content (repr, first 200 chars):", repr(assistant_content)[:200])
+    if DEBUG_MODE:
+        print(
+            "assistant_content (repr, first 200 chars):",
+            repr(assistant_content)[:200],
+        )
 
     # Gemini からうまく文章を取得できなかった場合は、ローカルの簡易ファシリテーター応答に切り替える
     if assistant_content.startswith(
         "AIからの応答をうまく読み取れませんでした。"
     ) or "Gemini APIキー" in assistant_content or "Gemini呼び出しでエラー" in assistant_content:
-        print("fallback: using local facilitator reply instead of Gemini response.")
+        if DEBUG_MODE:
+            print(
+                "fallback: using local facilitator reply instead of Gemini response."
+            )
         assistant_content = generate_local_facilitator_reply(text)
 
-    print("=== END DEBUG personal_chat_message ===")
+    if DEBUG_MODE:
+        print("=== END DEBUG personal_chat_message ===")
 
     # AI応答を履歴に追加
     assistant_msg = PersonalMessage(
@@ -702,13 +789,17 @@ async def promote_idea(
         [f"{m.role}: {m.content}" for m in history]
     )
 
+    session_description = session.description or "（説明なし）"
     system_prompt = (
-        "あなたはブレインストーミングの記録から、1つの具体的なアイデアを抽出するアシスタントである。"
-        "以下の対話履歴を読み、もっとも面白い／価値がありそうなアイデアを1つだけ選び、"
-        "次のフォーマットで出力せよ。\n\n"
-        "1行目: アイデアのタイトル（短い一文、日本語。見出しとして使われる／10〜20文字程度）\n"
-        "2行目以降: そのアイデアの詳細を具体的に説明する本文（複数行でもよい。全体でおおよそ400文字以内）\n\n"
-        "文体は「〜だ／〜である調」を用い、タイトルは印象的で短く、本文ではアイデアの内容がコンパクトに伝わるように書くこと。"
+        "# 命令\n"
+        "以下の対話履歴から、セッション情報に最も合致する価値あるアイデアを1つ抽出し、出力形式に従って提示せよ。\n\n"
+        "# セッション情報\n"
+        f"- タイトル: {session.title}\n"
+        f"- 説明: {session_description}\n\n"
+        "# 出力形式\n"
+        "- 1行目: タイトル（10〜20文字の日本語、印象的な短文）のみを書き、「タイトル:」「タイトル：」「- タイトル」などのラベルや記号は付けないこと。\n"
+        "- 2行目以降: 本文（400文字以内の具体的内容）のみを書き、「本文:」「本文：」「- 本文」などのラベルや見出しは付けないこと。\n"
+        "- 文体: 常体（だ・である調）\n"
     )
 
     user_prompt = f"対話履歴:\n{conversation_text}"
@@ -744,8 +835,26 @@ async def promote_idea(
             title = ""
             description = ""
         else:
-            title = lines[0].strip()
-            description = "\n".join(lines[1:]).strip() or lines[0].strip()
+            # 1行目: タイトル候補
+            raw_title = lines[0].strip()
+            # 先頭に付いてしまいがちな「タイトル:」「- タイトル」などのラベルを除去
+            title = re.sub(
+                r"^(?:[-・]\s*)?(?:タイトル|題名)\s*[:：]\s*",
+                "",
+                raw_title,
+            ).strip()
+
+            # 2行目以降: 本文候補
+            body_lines = lines[1:]
+            if body_lines:
+                # 先頭行に「本文:」「- 本文」などが付いている場合は削る
+                body_lines[0] = re.sub(
+                    r"^(?:[-・]\s*)?(?:本文|内容)\s*[:：]\s*",
+                    "",
+                    body_lines[0].strip(),
+                )
+            description = "\n".join(body_lines).strip() or title
+
         error_message = ""
 
     # ここではまだ保存せず、ユーザーに確認・編集してもらう
@@ -826,9 +935,13 @@ async def summarize_session(session_id: str):
         [f"- {m.author}: {m.content}" for m in session.messages]
     )
 
+    session_description = session.description or "（説明なし）"
     system_prompt = (
-        "あなたは少人数チームのブレインストーミングを支援するファシリテーターです。"
-        "以下の発言一覧を読み、論点ごとに整理し、日本語でわかりやすく要約してください。"
+        "あなたは少人数チームのブレインストーミングを支援するファシリテーターです。\n"
+        "セッションのタイトルと説明は次の通りです。\n"
+        f"- タイトル: 「{session.title}」\n"
+        f"- 説明: 「{session_description}」\n"
+        "以下の発言一覧を読み、このセッションの目的に沿う形で論点ごとに整理し、日本語でわかりやすく要約してください。\n"
         "出力フォーマットは次のようにしてください：\n\n"
         "1. 論点のグルーピング（見出し＋短い説明）\n"
         "2. 各グループの代表的な意見\n"

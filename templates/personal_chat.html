@@ -72,20 +72,14 @@
             >
               ← メインページに戻る
             </a>
-            <form
-              method="post"
-              action="/sessions/{{ session.id }}/personal/reset"
-              onsubmit="return confirm('この個人チャットの履歴をすべて削除してリセットします。よろしいですか？');"
-              class="inline"
-            >
-              <input type="hidden" name="user_id" value="{{ user_id }}" />
               <button
                 type="submit"
+              form="personal-reset-form"
+              onclick="return confirm('この個人チャットの履歴をすべて削除してリセットします。よろしいですか？');"
                 class="text-xs text-red-500 hover:text-red-700 underline"
               >
                 チャットをリセット
               </button>
-            </form>
           </div>
           <button
             type="submit"
@@ -94,6 +88,15 @@
             送信する
           </button>
         </div>
+      </form>
+      <!-- 個人チャットのリセット用フォーム（画面上には表示しない） -->
+      <form
+        id="personal-reset-form"
+        method="post"
+        action="/sessions/{{ session.id }}/personal/reset"
+        class="hidden"
+      >
+        <input type="hidden" name="user_id" value="{{ user_id }}" />
       </form>
     </section>
 
@@ -127,7 +130,6 @@
         </div>
       </div>
     </section>
-  </div>
 </div>
 </div>
 
@@ -139,6 +141,5 @@
     }
   })();
 </script>
-</div>
-{% endblock %}*** End Patch`"}}
 
+{% endblock %}
