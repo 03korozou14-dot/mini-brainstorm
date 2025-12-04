@@ -35,6 +35,9 @@ else:
 
 load_dotenv()
 
+# デバッグログの出力有無（プロンプトやレスポンスをログに出すかどうか）
+DEBUG_MODE = os.getenv("BRAINSTORM_DEBUG", "").lower() in {"1", "true", "yes"}
+
 # アプリ内で使用するタイムゾーン（日本時間）
 JST = timezone(timedelta(hours=9))
 
@@ -52,11 +55,12 @@ supabase_client: Any | None = None
 if create_client and SUPABASE_URL and SUPABASE_SERVICE_KEY:
     try:
         supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    except Exception:
+        if DEBUG_MODE:
+            print("[DEBUG] Supabase client initialized.")
+    except Exception as e:
+        if DEBUG_MODE:
+            print("[DEBUG] Failed to initialize Supabase client:", repr(e))
         supabase_client = None
-
-# デバッグログの出力有無（プロンプトやレスポンスをログに出すかどうか）
-DEBUG_MODE = os.getenv("BRAINSTORM_DEBUG", "").lower() in {"1", "true", "yes"}
 
 app = FastAPI(title="Mini Idobata Brainstorm")
 
@@ -133,12 +137,18 @@ def _save_state() -> None:
 
     if supabase_client:
         try:
+            if DEBUG_MODE:
+                print("[DEBUG] Saving state to Supabase table:", SUPABASE_TABLE)
             supabase_client.table(SUPABASE_TABLE).upsert(
                 {"id": SUPABASE_STATE_ID, "data": data}
             ).execute()
+            if DEBUG_MODE:
+                print("[DEBUG] Successfully saved state to Supabase.")
             return
-        except Exception:
+        except Exception as e:
             # Supabase 保存に失敗した場合は、ローカルファイルへの保存にフォールバックする
+            if DEBUG_MODE:
+                print("[DEBUG] Failed to save state to Supabase, falling back to file:", repr(e))
             pass
 
     # Supabase が無い・失敗した場合はローカルファイルに保存
@@ -163,6 +173,8 @@ def _load_state() -> None:
     # Supabase からの読み込みを優先
     if supabase_client:
         try:
+            if DEBUG_MODE:
+                print("[DEBUG] Loading state from Supabase table:", SUPABASE_TABLE)
             res = (
                 supabase_client.table(SUPABASE_TABLE)
                 .select("data")
@@ -170,13 +182,19 @@ def _load_state() -> None:
                 .execute()
             )
             rows = getattr(res, "data", []) or []
+            if DEBUG_MODE:
+                print(f"[DEBUG] Supabase returned {len(rows)} rows for state id={SUPABASE_STATE_ID}")
             if rows:
                 data = rows[0].get("data") or {}
-        except Exception:
+        except Exception as e:
+            if DEBUG_MODE:
+                print("[DEBUG] Failed to load state from Supabase, will try file:", repr(e))
             data = None
 
     # Supabase で取得できなかった場合はローカルファイルから読み込む
     if data is None:
+        if DEBUG_MODE:
+            print("[DEBUG] No state from Supabase, trying local file:", STATE_FILE)
         if not STATE_FILE.exists():
             return
         try:
